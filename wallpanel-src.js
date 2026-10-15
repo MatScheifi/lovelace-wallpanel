@@ -131,6 +131,7 @@ const defaultConfig = {
 	profile: "",
 	profile_entity: "",
 	config_entity: "",
+	command_entity: "",
 	profiles: {}
 };
 const renamedConfigOptions = {
@@ -1712,6 +1713,8 @@ function initWallpanel() {
 				updateConfig();
 			}
 
+			this.handleCommandEntity();
+
 			if (!isActive()) {
 				return;
 			}
@@ -1828,6 +1831,61 @@ function initWallpanel() {
 						logger.error("Failed to set PhotoPrism status entity state:", error);
 					}
 				);
+		}
+
+		// Executes the command in the state of the command_entity ("<command>" or "<command>|<counter>")
+		// when the state changes. The state at load time is only remembered.
+		handleCommandEntity() {
+			const commandEntity = config.command_entity;
+			const entity = commandEntity ? this.__hass.states[commandEntity] : null;
+			if (!entity) {
+				this.lastCommandEntityKey = null;
+				return;
+			}
+			const key = `${commandEntity}|${entity.state}|${entity.last_changed}`;
+			const lastKey = this.lastCommandEntityKey;
+			this.lastCommandEntityKey = key;
+			if (!lastKey || !lastKey.startsWith(`${commandEntity}|`) || key == lastKey) {
+				return;
+			}
+			const command = String(entity.state).split("|")[0].trim().toLowerCase();
+			if (!command || command == "unknown" || command == "unavailable") {
+				return;
+			}
+			this.executeCommand(command);
+		}
+
+		executeCommand(command) {
+			if (!isActive()) {
+				logger.debug(`Ignoring command "${command}", WallPanel is not active`);
+				return;
+			}
+			if (command == "start") {
+				if (!this.screensaverRunning()) {
+					this.startScreensaver();
+				}
+				return;
+			}
+			if (!this.screensaverRunning()) {
+				logger.debug(`Ignoring command "${command}", screensaver is not running`);
+				return;
+			}
+			logger.debug(`Executing command "${command}"`);
+			if (command == "next") {
+				this.nextImage();
+			} else if (command == "previous") {
+				this.previousImage();
+			} else if (command == "pause") {
+				if (!this.isPaused) this.togglePlayPause();
+			} else if (command == "resume") {
+				if (this.isPaused) this.togglePlayPause();
+			} else if (command == "toggle_pause") {
+				this.togglePlayPause();
+			} else if (command == "stop") {
+				this.stopScreensaver();
+			} else {
+				logger.warn(`Unknown command "${command}" in ${config.command_entity}`);
+			}
 		}
 
 		updateProfile() {
@@ -5589,6 +5647,37 @@ function initWallpanel() {
 			this.setCameraMotionDetectionEntityState(false);
 		}
 
+		// Checks if the event target is part of the cards, badges, views or info boxes,
+		// including menus and popups rendered in their shadow DOM, or a Home Assistant
+		// dialog or overlay opened from them on document level.
+		isContentInteractionEvent(evt) {
+			if (typeof evt.composedPath !== "function") {
+				return false;
+			}
+			const contentElements = [
+				...(this.__cards || []),
+				...(this.__badges || []),
+				...(this.__views || []),
+				this.infoBoxContent,
+				this.fixedInfoBoxContent
+			].filter((element) => element);
+			for (const element of evt.composedPath()) {
+				if (contentElements.includes(element)) {
+					logger.debug("Event on content element:", element);
+					return true;
+				}
+				const tagName = element.tagName ? element.tagName.toLowerCase() : "";
+				if (
+					tagName &&
+					/^(ha-dialog|ha-more-info-dialog|ha-md-dialog|vaadin-.*-overlay|mwc-menu-surface)$/.test(tagName)
+				) {
+					logger.debug("Event on dialog or overlay:", element);
+					return true;
+				}
+			}
+			return false;
+		}
+
 		handleInteractionEvent(evt) {
 			const isClick = ["click", "touchend"].includes(evt.type);
 			const now = Date.now();
@@ -5671,7 +5760,7 @@ function initWallpanel() {
 			}
 
 			if (config.content_interaction) {
-				if (this.getMoreInfoDialog()) {
+				if (this.getMoreInfoDialog() || this.isContentInteractionEvent(evt)) {
 					return;
 				}
 				let elements = [];

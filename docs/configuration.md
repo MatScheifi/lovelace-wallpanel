@@ -112,6 +112,7 @@ You can set the following configuration parameters for every individual Home Ass
 | profile                          | Configuration profile to activate. If browser_mod is installed, `${browser_id}` will be replaced with Browser ID (see [Browser Mod](browser-mod.md#placeholder-browser_id)). |            |
 | profile_entity                   | An entity of type 'input_text' used for dynamic activation of profiles. If browser_mod is installed, `${browser_id}` will be replaced with Browser ID (see [Browser Mod](browser-mod.md#placeholder-browser_id)). |            |
 | config_entity                    | An entity whose `wallpanel` attribute (a dictionary of configuration options) is applied on top of the configuration. See [Configuration from an entity attribute](configuration.md#configuration-from-an-entity-attribute). |            |
+| command_entity                   | An entity of type 'input_text' used to send commands like `next` or `previous` to WallPanel. See [Commands from Home Assistant](configuration.md#commands-from-home-assistant). |            |
 | camera_motion_detection_enabled          | Activate camera based motion detection? Screensaver is stopped when movement is detected See [Camera motion detection](camera-motion-detection.md) for details. | false      |
 | camera_motion_detection_stop_screensaver | Stop screensaver when motion is detected?                                                      | true       |
 | camera_motion_detection_set_entity       | An entity of type 'input_boolean' to update with the motion detection state (on = motion detected, off = no motion detected). | | 
@@ -336,6 +337,53 @@ wallpanel:
 
 `config_entity` and `profile_entity` can refer to the same entity, the profile is selected by the state
 and the attribute adjusts the configuration of the selected profile.
+
+## Commands from Home Assistant
+With `command_entity`, WallPanel can be controlled from Home Assistant, for example with buttons on a card shown over the screensaver.
+WallPanel watches the state of the `input_text` entity and executes the command when the state changes.
+The state at load time is not executed.
+
+The state has the format `<command>` or `<command>|<anything>`.
+Add a changing value like a timestamp after the `|`, so that the same command can be sent several times in a row.
+
+| Command        | Description                                                         |
+| -------------- | ------------------------------------------------------------------- |
+| `next`         | Show the next media item, the display time starts again.            |
+| `previous`     | Show the previous media item, the display time starts again.        |
+| `pause`        | Pause the slideshow.                                                |
+| `resume`       | Resume the slideshow.                                               |
+| `toggle_pause` | Pause or resume the slideshow.                                      |
+| `start`        | Start the screensaver.                                              |
+| `stop`         | Stop the screensaver.                                               |
+
+Commands are only executed if WallPanel is active on the device, all commands except `start` only while the screensaver is running.
+Every device with the same `command_entity` executes the command, use a [device profile](configuration.md#profiles) to use different entities per device.
+
+!!! note
+    WallPanel can't subscribe to custom events, as Home Assistant only allows administrators to subscribe to them.
+    This is why an entity is used for the commands.
+
+Example:
+```yaml
+input_text:
+  wallpanel_command:
+    name: WallPanel command
+    max: 255
+
+script:
+  wallpanel_next:
+    sequence:
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.wallpanel_command
+        data:
+          value: "next|{{ now().timestamp() }}"
+```
+
+```yaml
+wallpanel:
+  command_entity: input_text.wallpanel_command
+```
 
 ## Enable WallPanel on specific Views
 To enable WallPanel only on specific views, use the `enabled_on_views` configuration option.
