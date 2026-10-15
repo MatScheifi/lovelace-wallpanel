@@ -99,7 +99,7 @@ Valid values are:
 * `auto`: excludes media whose orientation does not match the screen orientation
 
 !!! note
-    This option is currently only supported for the Immich media source.
+    This option is currently only supported for the Immich and PhotoPrism media sources.
 
 **Example**
 ```yaml
@@ -250,6 +250,108 @@ image_url: immich+https://immich.your.domain/api
 immich_api_keys:
   - 0vOb7EZ7YSajUQckMt6Cbnri8Ifzo5dlD9Q5hnnXlc
 immich_favorites: true
+```
+
+## PhotoPrism API
+Images and videos can be loaded from a [PhotoPrism](https://www.photoprism.app/) server,
+for which WallPanel accesses the [PhotoPrism API](https://docs.photoprism.app/developer-guide/api/).
+Images are loaded through the [Thumbnail Image API](https://docs.photoprism.app/developer-guide/api/thumbnails/),
+videos are streamed as MPEG-4 AVC (H.264).
+
+### PhotoPrism access token
+WallPanel authenticates with an app password or a client access token (`Authorization: Bearer <token>`).
+App passwords can be created in the PhotoPrism web interface under *Settings > Account > Apps and Devices*
+or with the `photoprism auth add` command, for example:
+
+```bash
+photoprism auth add -n WallPanel -s "photos albums labels config" admin
+```
+
+The authorization scope must include `photos` as well as `config`, which is needed to get the preview token
+that is part of the thumbnail and video URLs. Add `albums` and/or `labels` if you select pictures by album or label name.
+On current PhotoPrism versions you can also use the read-only scope `read`, or `*` to allow all.
+See [Client Authentication](https://docs.photoprism.app/developer-guide/api/auth/) for details.
+
+!!! note
+    Thumbnail and video URLs contain the preview token of the account, they are valid as long as the token is.
+    The preview token changes when the account password is changed, WallPanel will then fetch the new token
+    the next time the media list is updated.
+
+### PhotoPrism server CORS
+WallPanel sends direct requests to the PhotoPrism server via the browser, which enforces CORS (Cross-Origin Resource Sharing).
+PhotoPrism supports CORS through its [config options](https://docs.photoprism.app/getting-started/config-options/).
+Set the origin to the URL of your Home Assistant instance and add `Authorization` to the allowed headers:
+
+```yaml
+PHOTOPRISM_CORS_ORIGIN: "https://homeassistant.your.domain:8123"
+PHOTOPRISM_CORS_HEADERS: "Accept, Accept-Ranges, Authorization, Content-Disposition, Content-Encoding, Content-Range, Location"
+PHOTOPRISM_CORS_METHODS: "GET, HEAD, OPTIONS"
+```
+
+`PHOTOPRISM_CORS_METHODS` can be left at its default value, as WallPanel only sends `GET` requests.
+Preflight requests are handled correctly since PhotoPrism build 251130, for older versions
+configure CORS in a reverse proxy instead (see [Immich server CORS](#immich-server-cors)).
+
+!!! warning
+    For security reasons, it's best to specify the URL of your Home Assistant instance in `PHOTOPRISM_CORS_ORIGIN` rather than using `*`.
+
+### Wallpanel configuration
+You need to set the `image_url` to `photoprism+<your PhotoPrism URL>` and add the access token to `photoprism_access_tokens`.
+Multiple access tokens can be added to use multiple accounts on the same server.
+The timeout for PhotoPrism API requests can be set using the `photoprism_api_request_timeout` configuration option and defaults to 15 seconds.
+
+The following options select the media items:
+
+* `photoprism_album_names`: list of album titles
+* `photoprism_label_names`: list of label names
+* `photoprism_favorites`: `true` to show favorites only
+* `photoprism_query`: a [PhotoPrism search query](https://docs.photoprism.app/user-guide/search/filters/), e.g. `year:2024 country:at`
+
+Media items from all configured albums and labels are combined.
+If neither albums nor labels are configured, the whole library is used.
+`photoprism_favorites` and `photoprism_query` restrict the results further, also in combination with albums and labels.
+Archived and private pictures are not included.
+
+With the config option `photoprism_resolution` you can select the resolution of the images:
+
+* `preview` (default): `fit_1920` thumbnails
+* `original`: the largest thumbnail size (`fit_7680`), PhotoPrism reduces the size to the largest size available on the server,
+  see [Size Limits](https://docs.photoprism.app/developer-guide/api/thumbnails/#size-limits)
+* a [thumbnail size](https://docs.photoprism.app/developer-guide/api/thumbnails/#thumbnail-sizes) name like `fit_2560`
+
+The picture metadata returned by PhotoPrism (for example `Title`, `TakenAtLocal`, `PlaceLabel`, `CameraModel`)
+can be used in the `image_info_template`.
+
+Example showing PhotoPrism favorites:
+```yaml
+image_url: photoprism+https://photos.your.domain
+photoprism_access_tokens:
+  - Y2b7Q-wXZpo-7rKcS-fNa3u
+photoprism_favorites: true
+exclude_media_orientation: auto
+```
+
+Example using album names:
+```yaml
+image_url: photoprism+https://photos.your.domain
+photoprism_access_tokens:
+  - Y2b7Q-wXZpo-7rKcS-fNa3u
+photoprism_album_names:
+  - Tokio
+  - New York
+photoprism_resolution: fit_2560
+```
+
+Example using labels, restricted to pictures taken in 2024:
+```yaml
+image_url: photoprism+https://photos.your.domain
+photoprism_access_tokens:
+  - Y2b7Q-wXZpo-7rKcS-fNa3u
+photoprism_label_names:
+  - Cat
+  - Dog
+photoprism_query: "year:2024"
+image_info_template: "${Title} - ${TakenAtLocal}"
 ```
 
 ## Website as iframe
