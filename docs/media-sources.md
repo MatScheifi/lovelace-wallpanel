@@ -384,6 +384,9 @@ image_info_template: "${Title} - ${TakenAtLocal}"
   If the days span several months, one query per month is sent and the results are combined.
 * `{week}`: same as `{days:3}`
 
+Set `photoprism_reference_date` to use another date than today, either as `YYYY-MM-DD` or as `MM-DD` (current year).
+If a reference date is set, the media list is not updated when the day changes.
+
 If `photoprism_query` is a list, the queries are tried in order and the first one that returns
 at least `photoprism_query_min_results` pictures (default: `1`) is used.
 If no query reaches this number, the query with the most pictures is used.
@@ -436,6 +439,18 @@ media_list_max_size: 60
 media_list_update_interval: 3600
 image_info_template: "${image.folderName} - ${TakenAtLocal}"
 ```
+
+### PhotoPrism status
+If `photoprism_status_entity` is set to an `input_text` entity, a short status text is written to it after every media list update,
+for example:
+
+* `Album: Schweden 2025 (797) · 60 Bilder · 15:00` (`photoprism_album_mode: random_single`)
+* `Alben: 62 · 60 Bilder · 15:00` (all configured albums)
+* `15.10. ±3 Tage · 43 Bilder (Stufe 2/6) · 15:00` (reference date, selected query of the `photoprism_query` list
+  and number of matching pictures before limiting to `media_list_max_size`)
+* `Keine Bilder gefunden (15.10. Tag) · 15:00`
+
+The text is limited to 255 characters, the maximum length of an `input_text` entity.
 
 ## Website as iframe
 You can also display a website in an iframe.

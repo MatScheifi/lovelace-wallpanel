@@ -74,6 +74,8 @@ const defaultConfig = {
 	photoprism_query: "",
 	photoprism_query_min_results: 1,
 	photoprism_album_mode: "all", // all / random_single
+	photoprism_reference_date: "", // YYYY-MM-DD / MM-DD, default: today
+	photoprism_status_entity: "",
 	photoprism_resolution: "preview", // preview / original / thumbnail size name (e.g. fit_2560)
 	image_fit_landscape: "cover", // cover / contain
 	image_fit_portrait: "contain", // cover / contain
@@ -128,6 +130,7 @@ const defaultConfig = {
 	content_interaction: false,
 	profile: "",
 	profile_entity: "",
+	config_entity: "",
 	profiles: {}
 };
 const renamedConfigOptions = {
@@ -250,6 +253,7 @@ let userName = null;
 let userDisplayname = null;
 let profileEntityState = null;
 let profileEntityStateChanged = false;
+let configEntityValue = null;
 
 function isObject(item) {
 	return item && typeof item === "object" && !Array.isArray(item);
@@ -971,6 +975,63 @@ function sampleDistinctIntegers(total, n, randomFn = Math.random) {
 	return result;
 }
 
+// Returns the "wallpanel" attribute of the config_entity, if it is an object.
+function getConfigEntityConfig() {
+	const configEntity = config.config_entity;
+	if (!configEntity || !elHass) {
+		return null;
+	}
+	const hass = elHass.hass || elHass.__hass;
+	const entity = hass && hass.states ? hass.states[configEntity] : null;
+	if (!entity) {
+		logger.debug(`Config entity ${configEntity} not found`);
+		return null;
+	}
+	const value = entity.attributes ? entity.attributes.wallpanel : null;
+	if (!isObject(value)) {
+		logger.debug(`Config entity ${configEntity} has no wallpanel attribute of type object`);
+		return null;
+	}
+	return value;
+}
+
+// Returns the date to use for the PhotoPrism query placeholders,
+// the configured photoprism_reference_date (YYYY-MM-DD or MM-DD) or null.
+function getPhotoPrismReferenceDate() {
+	const value = String(config.photoprism_reference_date || "").trim();
+	if (!value) {
+		return null;
+	}
+	const match = value.match(/^(?:(\d{4})-)?(\d{1,2})-(\d{1,2})$/);
+	if (match) {
+		const year = match[1] ? Number(match[1]) : new Date().getFullYear();
+		const month = Number(match[2]);
+		const day = Number(match[3]);
+		const date = new Date(year, month - 1, day);
+		if (date.getFullYear() == year && date.getMonth() == month - 1 && date.getDate() == day) {
+			return date;
+		}
+	}
+	logger.warn(`Invalid photoprism_reference_date "${value}", using the current date`);
+	return null;
+}
+
+// Returns a short description of a photoprism_query for the status entity.
+function describePhotoPrismQuery(query) {
+	query = (query || "").trim();
+	if (/^month:\{month\}\s+day:\{day\}$/.test(query)) {
+		return "Tag";
+	}
+	if (/^month:\{month\}$/.test(query)) {
+		return "Monat";
+	}
+	const match = query.match(/^\{(week|days:(\d+))\}$/);
+	if (match) {
+		return `±${match[2] || 3} Tage`;
+	}
+	return query;
+}
+
 const PHOTOPRISM_DATE_PLACEHOLDER_REGEXP = /\{(day|month|year|week|days:\d+)\}/;
 
 function photoprismQueryHasDatePlaceholder(query) {
@@ -1195,6 +1256,22 @@ function updateConfig() {
 		profileEntityState = profile;
 	}
 	profileEntityStateChanged = profileEntityState !== oldProfileEntityState;
+
+	const entityConfig = getConfigEntityConfig();
+	configEntityValue = entityConfig ? JSON.stringify(entityConfig) : null;
+	if (entityConfig) {
+		const ignoredKeys = ["profile", "profiles", "profile_entity", "config_entity"];
+		const liveConfig = {};
+		for (const key in entityConfig) {
+			if (ignoredKeys.includes(key)) {
+				logger.warn(`Ignoring '${key}' in the wallpanel attribute of ${config.config_entity}`);
+			} else {
+				liveConfig[key] = entityConfig[key];
+			}
+		}
+		config = mergeConfig(config, liveConfig);
+		logger.debug(`Config set from entity ${config.config_entity}:`, liveConfig);
+	}
 
 	if (config.content_interaction) {
 		config.stop_screensaver_on_mouse_move = false;
@@ -1624,6 +1701,13 @@ function initWallpanel() {
 				}
 			}
 			const profileUpdated = this.updateProfile();
+			if (!profileUpdated && config.config_entity) {
+				const entityConfig = getConfigEntityConfig();
+				if ((entityConfig ? JSON.stringify(entityConfig) : null) !== configEntityValue) {
+					logger.debug(`Config entity ${config.config_entity} changed`);
+					changed = true;
+				}
+			}
 			if (!profileUpdated && changed) {
 				updateConfig();
 			}
@@ -1716,6 +1800,32 @@ function initWallpanel() {
 					},
 					(error) => {
 						logger.error("Failed to set image url entity state:", error);
+					}
+				);
+		}
+
+		setPhotoPrismStatusEntityState(text) {
+			const status_entity = config.photoprism_status_entity;
+			if (!status_entity || !this.__hass || !this.__hass.states[status_entity]) return;
+			// Maximum length for input_text entity is 255
+			const value = text.length > 255 ? `${text.substring(0, 254)}…` : text;
+			if (this.lastPhotoPrismStatusValue === value) {
+				return;
+			}
+
+			logger.debug("Updating photoprism_status_entity", status_entity, value);
+			this.__hass
+				.callService("input_text", "set_value", {
+					entity_id: status_entity,
+					value: value
+				})
+				.then(
+					(result) => {
+						logger.debug(result);
+						this.lastPhotoPrismStatusValue = value;
+					},
+					(error) => {
+						logger.error("Failed to set PhotoPrism status entity state:", error);
 					}
 				);
 		}
@@ -2826,6 +2936,7 @@ function initWallpanel() {
 						JSON.stringify(config.photoprism_query) != JSON.stringify(oldConfig.photoprism_query) ||
 						config.photoprism_query_min_results != oldConfig.photoprism_query_min_results ||
 						config.photoprism_album_mode != oldConfig.photoprism_album_mode ||
+						config.photoprism_reference_date != oldConfig.photoprism_reference_date ||
 						config.photoprism_resolution != oldConfig.photoprism_resolution ||
 						JSON.stringify(config.photoprism_access_tokens) != JSON.stringify(oldConfig.photoprism_access_tokens) ||
 						JSON.stringify(config.photoprism_album_names) != JSON.stringify(oldConfig.photoprism_album_names) ||
@@ -4114,8 +4225,11 @@ function initWallpanel() {
 			if (!queryChain.length) {
 				queryChain = [""];
 			}
-			const now = new Date();
-			wp.photoprismMediaListDate = queryChain.some(photoprismQueryHasDatePlaceholder) ? photoprismDateKey(now) : null;
+			const referenceDate = getPhotoPrismReferenceDate();
+			const now = referenceDate || new Date();
+			const hasDateQuery = queryChain.some(photoprismQueryHasDatePlaceholder);
+			// Queries with date placeholders are updated when the day changes, unless a reference date is set
+			wp.photoprismMediaListDate = hasDateQuery && !referenceDate ? photoprismDateKey(now) : null;
 
 			const albumNamesLower = (config.photoprism_album_names || []).map((v) => String(v).toLowerCase());
 			const labelNamesLower = (config.photoprism_label_names || []).map((v) => String(v).toLowerCase());
@@ -4250,9 +4364,53 @@ function initWallpanel() {
 				return [scope];
 			}
 
+			const status = { scopes: [], selectedScope: null, queryIndex: -1, hits: 0 };
+
+			function getStatusText() {
+				const pad = (n) => String(n).padStart(2, "0");
+				const updated = new Date();
+				const albums = status.scopes.filter((scope) => scope.key.startsWith("album:"));
+				const labels = status.scopes.filter((scope) => scope.key.startsWith("label:"));
+				let source;
+				if (status.selectedScope) {
+					const type = status.selectedScope.key.startsWith("label:") ? "Label" : "Album";
+					source = `${type}: ${status.selectedScope.name} (${status.selectedScope.count})`;
+				} else {
+					const parts = [];
+					for (const [scopes, one, many] of [
+						[albums, "Album", "Alben"],
+						[labels, "Label", "Labels"]
+					]) {
+						if (scopes.length == 1) {
+							parts.push(`${one}: ${scopes[0].name}`);
+						} else if (scopes.length > 1) {
+							parts.push(`${many}: ${scopes.length}`);
+						}
+					}
+					source = parts.length ? parts.join(" · ") : "Mediathek";
+				}
+				const query = status.queryIndex >= 0 ? queryChain[status.queryIndex] : "";
+				let text;
+				if (query) {
+					// Query: reference date, query description, number of matches and query level
+					let description = describePhotoPrismQuery(query);
+					if (photoprismQueryHasDatePlaceholder(query)) {
+						description = `${pad(now.getDate())}.${pad(now.getMonth() + 1)}. ${description}`;
+					}
+					const level = queryChain.length > 1 ? ` (Stufe ${status.queryIndex + 1}/${queryChain.length})` : "";
+					text = status.hits
+						? `${description} · ${status.hits} Bilder${level}`
+						: `Keine Bilder gefunden (${description})`;
+				} else {
+					text = urls.length ? `${source} · ${urls.length} Bilder` : `Keine Bilder gefunden (${source})`;
+				}
+				return `${text} · ${pad(updated.getHours())}:${pad(updated.getMinutes())}`;
+			}
+
 			try {
 				for (const accessToken of config.photoprism_access_tokens) {
 					let scopes = await getScopes(accessToken);
+					status.scopes.push(...scopes);
 					if (!scopes.length) {
 						continue;
 					}
@@ -4263,28 +4421,35 @@ function initWallpanel() {
 						scopes.every((scope) => Number.isFinite(scope.count))
 					) {
 						scopes = selectRandomScope(scopes);
+						status.selectedScope = scopes[0];
 					}
 					// The first query of the chain with at least photoprism_query_min_results pictures is used.
 					// If no query reaches the minimum, the query with the most pictures is used.
 					let photos = new Map();
 					let headerTokens = [];
+					let queryIndex = -1;
 					let best = null;
-					for (const query of queryChain) {
+					for (let i = 0; i < queryChain.length; i++) {
+						const query = queryChain[i];
 						photos = new Map();
 						headerTokens = await searchScopes(accessToken, scopes, query, photos);
+						queryIndex = i;
 						logger.debug(`Found ${photos.size} PhotoPrism pictures using query "${query}"`);
 						if (photos.size >= minResults) {
 							best = null;
 							break;
 						}
 						if (photos.size && (!best || photos.size >= best.photos.size)) {
-							best = { photos: photos, headerTokens: headerTokens };
+							best = { photos: photos, headerTokens: headerTokens, queryIndex: i };
 						}
 					}
 					if (best) {
 						photos = best.photos;
 						headerTokens = best.headerTokens;
+						queryIndex = best.queryIndex;
 					}
+					status.queryIndex = queryIndex;
+					status.hits += photos.size;
 					if (!photos.size) {
 						continue;
 					}
@@ -4295,6 +4460,7 @@ function initWallpanel() {
 				}
 
 				finalizeImageList();
+				wp.setPhotoPrismStatusEntityState(getStatusText());
 			} catch (error) {
 				logger.error("PhotoPrism API processing failed:", error);
 				throw error; // Re-throw for the main updateMediaList handler

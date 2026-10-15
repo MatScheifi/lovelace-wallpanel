@@ -67,6 +67,8 @@ You can set the following configuration parameters for every individual Home Ass
 | photoprism_query                 | PhotoPrism search query or list of queries, supports date placeholders. See [On this day](media-sources.md#on-this-day) for details. |           |
 | photoprism_query_min_results     | Minimum number of pictures a query of the `photoprism_query` list must return. See [On this day](media-sources.md#on-this-day) for details. | 1         |
 | photoprism_album_mode            | `all` to show media from all albums, `random_single` to show media from a single random album per media list update. See [Random album](media-sources.md#random-album). | all       |
+| photoprism_reference_date        | Date used for the date placeholders of `photoprism_query` instead of the current date (`YYYY-MM-DD` or `MM-DD`). See [On this day](media-sources.md#on-this-day). |           |
+| photoprism_status_entity         | An entity of type 'input_text' that receives a short status text after every PhotoPrism media list update. See [PhotoPrism status](media-sources.md#photoprism-status). |           |
 | photoprism_resolution            | The resolution to use for loading media from PhotoPrism (`preview` / `original` / thumbnail size name like `fit_2560`). | preview   |
 | exclude_filenames                | List of regular expressions for excluding files and directories from media sources. See [Media Sources](media-sources.md#exclude-files) for details. | []        |
 | exclude_media_types              | List of media types to exlcude media sources. See [Media Sources](media-sources.md#exclude-files) for details. | []        |
@@ -109,6 +111,7 @@ You can set the following configuration parameters for every individual Home Ass
 | profiles                         | See [Configuration profiles](#profiles) for details.                                                   | {}         |
 | profile                          | Configuration profile to activate. If browser_mod is installed, `${browser_id}` will be replaced with Browser ID (see [Browser Mod](browser-mod.md#placeholder-browser_id)). |            |
 | profile_entity                   | An entity of type 'input_text' used for dynamic activation of profiles. If browser_mod is installed, `${browser_id}` will be replaced with Browser ID (see [Browser Mod](browser-mod.md#placeholder-browser_id)). |            |
+| config_entity                    | An entity whose `wallpanel` attribute (a dictionary of configuration options) is applied on top of the configuration. See [Configuration from an entity attribute](configuration.md#configuration-from-an-entity-attribute). |            |
 | camera_motion_detection_enabled          | Activate camera based motion detection? Screensaver is stopped when movement is detected See [Camera motion detection](camera-motion-detection.md) for details. | false      |
 | camera_motion_detection_stop_screensaver | Stop screensaver when motion is detected?                                                      | true       |
 | camera_motion_detection_set_entity       | An entity of type 'input_boolean' to update with the motion detection state (on = motion detected, off = no motion detected). | | 
@@ -306,6 +309,33 @@ wallpanel:
 
 A profile can be selected using a URL parameter:
 `http://hass:8123/lovelace/default_view?wp_profile=night`
+
+## Configuration from an entity attribute
+With `config_entity`, configuration options can be changed from Home Assistant without changing the dashboard.
+The `wallpanel` attribute of the entity must be a dictionary of configuration options,
+it is applied after all profiles and URL query parameters.
+The configuration is updated whenever the attribute changes.
+If the entity or the attribute does not exist, or the attribute is not a dictionary, it is ignored.
+The options `profile`, `profiles`, `profile_entity` and `config_entity` can't be set this way.
+
+A template sensor can provide the attribute, for example:
+```yaml
+template:
+  - sensor:
+      - name: WallPanel config
+        state: "{{ states('input_select.wallpanel_album') }}"
+        attributes:
+          wallpanel: >
+            {{ {"photoprism_album_names": [states('input_select.wallpanel_album')]} }}
+```
+
+```yaml
+wallpanel:
+  config_entity: sensor.wallpanel_config
+```
+
+`config_entity` and `profile_entity` can refer to the same entity, the profile is selected by the state
+and the attribute adjusts the configuration of the selected profile.
 
 ## Enable WallPanel on specific Views
 To enable WallPanel only on specific views, use the `enabled_on_views` configuration option.
