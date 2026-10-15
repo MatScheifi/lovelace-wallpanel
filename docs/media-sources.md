@@ -264,8 +264,10 @@ App passwords can be created in the PhotoPrism web interface under *Settings > A
 or with the `photoprism auth add` command, for example:
 
 ```bash
-photoprism auth add -n WallPanel -s "photos albums labels config" admin
+photoprism auth add -n WallPanel -s "photos albums labels config" -e -1 admin
 ```
+
+App passwords expire after one year by default, `-e -1` creates an app password that does not expire.
 
 The authorization scope must include `photos` as well as `config`, which is needed to get the preview token
 that is part of the thumbnail and video URLs. Add `albums` and/or `labels` if you select pictures by album or label name.
@@ -305,12 +307,26 @@ The following options select the media items:
 * `photoprism_album_names`: list of album titles
 * `photoprism_label_names`: list of label names
 * `photoprism_favorites`: `true` to show favorites only
-* `photoprism_query`: a [PhotoPrism search query](https://docs.photoprism.app/user-guide/search/filters/), e.g. `year:2024 country:at`
+* `photoprism_query`: a [PhotoPrism search query](https://docs.photoprism.app/user-guide/search/filters/), e.g. `year:2024 country:at`,
+  or a list of queries (see [On this day](#on-this-day))
 
 Media items from all configured albums and labels are combined.
+Album titles are matched exactly (case-insensitive), if several albums have the same title, all of them are used.
 If neither albums nor labels are configured, the whole library is used.
 `photoprism_favorites` and `photoprism_query` restrict the results further, also in combination with albums and labels.
 Archived and private pictures are not included.
+If `exclude_media_types` contains `video`, videos are already excluded by PhotoPrism, live photos are shown as images.
+
+With the default `media_order` `random`, PhotoPrism selects random pictures,
+so only `media_list_max_size` media items are loaded on every media list update instead of the whole library.
+If albums or labels are configured, the media items are distributed over them according to their number of pictures.
+With `photoprism_favorites` or `photoprism_query`, up to `media_list_max_size` media items are loaded from every album and label,
+WallPanel then selects `media_list_max_size` random items from them.
+With `media_order` `sorted` or `random_but_synced`, all matching media items are loaded.
+
+The media list is updated every `media_list_update_interval` seconds and when the profile set by `profile_entity` changes.
+Small values for `media_list_max_size` and `media_list_update_interval` (for example `60` and `3600`) result in
+a new selection of pictures every hour.
 
 With the config option `photoprism_resolution` you can select the resolution of the images:
 
@@ -351,6 +367,38 @@ photoprism_label_names:
   - Cat
   - Dog
 photoprism_query: "year:2024"
+image_info_template: "${Title} - ${TakenAtLocal}"
+```
+
+### On this day
+`photoprism_query` can contain the following placeholders, which are replaced with the current local date:
+
+* `{day}`: day of the month
+* `{month}`: month (1-12)
+* `{year}`: year
+* `{week}`: the days from three days before to three days after the current day (e.g. `month:10 day:12|13|14|15|16|17|18`),
+  if the days span two months, two queries are combined
+
+If `photoprism_query` is a list, the queries are tried in order and the first one that returns media items is used.
+Queries with placeholders are also updated when the day changes.
+
+Example showing pictures taken on this day in previous years from two albums,
+falling back to the current week and then to the current month:
+```yaml
+image_url: photoprism+https://photos.your.domain
+photoprism_access_tokens:
+  - Y2b7Q-wXZpo-7rKcS-fNa3u
+photoprism_album_names:
+  - Family
+  - Holidays
+photoprism_query:
+  - "month:{month} day:{day}"
+  - "{week}"
+  - "month:{month}"
+exclude_media_types:
+  - video
+media_list_max_size: 60
+media_list_update_interval: 3600
 image_info_template: "${Title} - ${TakenAtLocal}"
 ```
 
