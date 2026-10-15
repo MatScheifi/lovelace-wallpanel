@@ -247,6 +247,8 @@ let browserId = null;
 let userId = null;
 let userName = null;
 let userDisplayname = null;
+let profileEntityState = null;
+let profileEntityStateChanged = false;
 
 function isObject(item) {
 	return item && typeof item === "object" && !Array.isArray(item);
@@ -958,6 +960,52 @@ function shuffleArray(array, randomFn = Math.random) {
 	return result;
 }
 
+// Returns n distinct random integers from 0 to total - 1 (Floyd's algorithm).
+function sampleDistinctIntegers(total, n, randomFn = Math.random) {
+	const result = new Set();
+	for (let j = total - n; j < total; j++) {
+		const t = Math.floor(randomFn() * (j + 1));
+		result.add(result.has(t) ? j : t);
+	}
+	return result;
+}
+
+const PHOTOPRISM_DATE_PLACEHOLDER_REGEXP = /\{(day|month|year|week)\}/;
+
+function photoprismQueryHasDatePlaceholder(query) {
+	return PHOTOPRISM_DATE_PLACEHOLDER_REGEXP.test(query || "");
+}
+
+function photoprismDateKey(date) {
+	return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+}
+
+// Replaces the date placeholders of a PhotoPrism search query with the local date.
+// {week} selects the days from three days before to three days after the date.
+// As PhotoPrism can't combine month and day filters with OR, the query is split
+// into one query per month if the week spans two months.
+function expandPhotoPrismQuery(query, date) {
+	query = (query || "")
+		.replace(/\{day\}/g, date.getDate())
+		.replace(/\{month\}/g, date.getMonth() + 1)
+		.replace(/\{year\}/g, date.getFullYear());
+	if (!query.includes("{week}")) {
+		return [query];
+	}
+	const months = [];
+	for (let offset = -3; offset <= 3; offset++) {
+		const day = new Date(date.getFullYear(), date.getMonth(), date.getDate() + offset);
+		const month = day.getMonth() + 1;
+		let entry = months.find((m) => m.month == month);
+		if (!entry) {
+			entry = { month: month, days: [] };
+			months.push(entry);
+		}
+		entry.days.push(day.getDate());
+	}
+	return months.map((m) => query.replace(/\{week\}/g, `month:${m.month} day:${m.days.join("|")}`).trim());
+}
+
 function getHaCameraStreamPlayerAndVideo(haCameraStreamElement) {
 	if (!haCameraStreamElement.shadowRoot) {
 		return [null, null];
@@ -1123,6 +1171,8 @@ function updateConfig() {
 	}
 	config = mergeConfig(config, paramConfig);
 	const profile_entity = config.profile_entity;
+	const oldProfileEntityState = profileEntityState;
+	profileEntityState = null;
 	if (
 		config.profiles &&
 		profile_entity &&
@@ -1132,7 +1182,9 @@ function updateConfig() {
 		const profile = (elHass.hass || elHass.__hass).states[profile_entity].state;
 		config = mergeConfig(config, config.profiles[profile]);
 		logger.debug(`Profile set from entity state: ${profile}`);
+		profileEntityState = profile;
 	}
+	profileEntityStateChanged = profileEntityState !== oldProfileEntityState;
 
 	if (config.content_interaction) {
 		config.stop_screensaver_on_mouse_move = false;
@@ -2760,7 +2812,8 @@ function initWallpanel() {
 						JSON.stringify(config.immich_persons) != JSON.stringify(oldConfig.immich_persons))) ||
 				(mediaSourceType() == "photoprism-api" &&
 					(config.photoprism_favorites != oldConfig.photoprism_favorites ||
-						config.photoprism_query != oldConfig.photoprism_query ||
+						profileEntityStateChanged ||
+						JSON.stringify(config.photoprism_query) != JSON.stringify(oldConfig.photoprism_query) ||
 						config.photoprism_resolution != oldConfig.photoprism_resolution ||
 						JSON.stringify(config.photoprism_access_tokens) != JSON.stringify(oldConfig.photoprism_access_tokens) ||
 						JSON.stringify(config.photoprism_album_names) != JSON.stringify(oldConfig.photoprism_album_names) ||
@@ -3842,6 +3895,10 @@ function initWallpanel() {
 				.replace(/\/api\/v1$/, "");
 			const apiUrl = `${baseUrl}/api/v1`;
 			const pageSize = 1000;
+			const maxSize = Math.max(1, Number(config.media_list_max_size) || 1);
+			// With media_order "random", PhotoPrism selects the random media items (order=random),
+			// so only media_list_max_size items are fetched instead of the whole library.
+			const serverRandom = config.media_order == "random";
 			let urls = [];
 			const mediaInfo = {};
 			const excludeRegExp = [];
@@ -3906,9 +3963,9 @@ function initWallpanel() {
 				);
 			}
 
-			async function findPhotos(accessToken, params, folderName, photos) {
+			async function findPhotos(accessToken, params, folderName, photos, count = null) {
 				let previewToken = null;
-				await fetchAllPages("photos", params, accessToken, (results, headers) => {
+				const addResults = (results, headers) => {
 					// Only readable if the response header is exposed to the browser
 					previewToken = previewToken || headers.get("X-Preview-Token");
 					for (const photo of results) {
@@ -3916,7 +3973,18 @@ function initWallpanel() {
 							photos.set(photo.UID, { photo: photo, folderName: folderName });
 						}
 					}
-				});
+				};
+				if (count) {
+					// A random search returns a single file per picture (the video file for videos and live photos)
+					const query = new URLSearchParams({ ...params, order: "random", count: count, offset: 0 });
+					const { data, headers } = await wp._photoprismFetch(`${apiUrl}/photos?${query}`, accessToken);
+					logger.debug("Got PhotoPrism API response (photos, random)", data);
+					if (Array.isArray(data)) {
+						addResults(data, headers);
+					}
+				} else {
+					await fetchAllPages("photos", { ...params, order: "newest" }, accessToken, addResults);
+				}
 				return previewToken;
 			}
 
@@ -3965,6 +4033,8 @@ function initWallpanel() {
 				if (videoFile) {
 					url = `${apiUrl}/videos/${videoFile.Hash}/${previewToken}/avc`;
 				} else if (photo.Hash) {
+					// For live photos and videos this can be the hash of the video file,
+					// PhotoPrism then returns the thumbnail of the related image file.
 					url = `${apiUrl}/t/${photo.Hash}/${previewToken}/${thumbSize}`;
 				} else {
 					logger.debug("No file hash available, skipping");
@@ -4009,72 +4079,151 @@ function initWallpanel() {
 				wp.mediaList = urls;
 			}
 
-			// Favorites and query are applied to every search,
+			// Favorites and the media type are applied to every search,
 			// album and label names select the pictures to search in (combined with OR).
-			const searchParams = { merged: true, public: true, order: "newest" };
+			const searchParams = { merged: true, public: true };
 			if (config.photoprism_favorites) {
 				searchParams.favorite = true;
 			}
-			if (config.photoprism_query) {
-				searchParams.q = config.photoprism_query;
+			const excludeTypes = config.exclude_media_types || [];
+			if (excludeTypes.includes("video") && !excludeTypes.includes("image")) {
+				// Regular photos and images, including RAW and live photos
+				searchParams.photo = true;
+			} else if (excludeTypes.includes("image") && !excludeTypes.includes("video")) {
+				searchParams.video = true;
 			}
+
+			// photoprism_query can be a list of queries, the first one with results is used.
+			let queryChain = config.photoprism_query;
+			if (!Array.isArray(queryChain)) {
+				queryChain = [queryChain];
+			}
+			queryChain = queryChain.map((query) => (query === null || query === undefined ? "" : String(query).trim()));
+			if (!queryChain.length) {
+				queryChain = [""];
+			}
+			const now = new Date();
+			wp.photoprismMediaListDate = queryChain.some(photoprismQueryHasDatePlaceholder) ? photoprismDateKey(now) : null;
+
 			const albumNamesLower = (config.photoprism_album_names || []).map((v) => String(v).toLowerCase());
 			const labelNamesLower = (config.photoprism_label_names || []).map((v) => String(v).toLowerCase());
 
+			async function getScopes(accessToken) {
+				// A scope is a set of search parameters (album UID or label slug) with an optional picture count.
+				const scopes = [];
+				if (albumNamesLower.length) {
+					logger.debug("Fetching PhotoPrism albums");
+					const albums = [];
+					await fetchAllPages("albums", { type: "album" }, accessToken, (results) => {
+						albums.push(...results);
+					});
+					// Album titles are not unique, all albums with a matching title are used
+					const albumsToFetch = albums.filter((album) => {
+						const include = albumNamesLower.includes(String(album.Title).toLowerCase());
+						logger.debug(`${include ? "Adding" : "Skipping"} album: ${album.Title}`);
+						return include;
+					});
+					if (!albumsToFetch.length) {
+						logger.error(`No matching PhotoPrism albums found: ${config.photoprism_album_names}`);
+					}
+					for (const album of albumsToFetch) {
+						scopes.push({ params: { s: album.UID }, name: album.Title, count: album.PhotoCount });
+					}
+				}
+				if (labelNamesLower.length) {
+					logger.debug("Fetching PhotoPrism labels");
+					const labels = [];
+					await fetchAllPages("labels", { all: true }, accessToken, (results) => {
+						labels.push(...results);
+					});
+					const labelsToFetch = labels.filter((label) => {
+						const include =
+							labelNamesLower.includes(String(label.Name).toLowerCase()) ||
+							labelNamesLower.includes(String(label.Slug).toLowerCase());
+						logger.debug(`${include ? "Adding" : "Skipping"} label: ${label.Name}`);
+						return include;
+					});
+					if (!labelsToFetch.length) {
+						logger.error(`No matching PhotoPrism labels found: ${config.photoprism_label_names}`);
+					}
+					for (const label of labelsToFetch) {
+						scopes.push({ params: { label: label.Slug }, name: label.Name, count: label.PhotoCount });
+					}
+				}
+				if (!albumNamesLower.length && !labelNamesLower.length) {
+					scopes.push({ params: {}, name: null, count: null });
+				}
+				return scopes;
+			}
+
+			function getRandomCounts(scopes) {
+				// Distribute the media list size over the scopes weighted by their picture count,
+				// by picking random pictures from the concatenation of all scopes.
+				const counts = scopes.map(() => 0);
+				const total = scopes.reduce((sum, scope) => sum + scope.count, 0);
+				if (total <= maxSize) {
+					return scopes.map((scope) => scope.count);
+				}
+				for (const index of sampleDistinctIntegers(total, maxSize)) {
+					let offset = index;
+					for (let i = 0; i < scopes.length; i++) {
+						if (offset < scopes[i].count) {
+							counts[i]++;
+							break;
+						}
+						offset -= scopes[i].count;
+					}
+				}
+				return counts;
+			}
+
+			async function searchScopes(accessToken, scopes, query, photos) {
+				const headerTokens = [];
+				const queries = expandPhotoPrismQuery(query, now);
+				// The picture counts of albums and labels only apply if there is no further filter
+				const weighted =
+					serverRandom &&
+					queries.length == 1 &&
+					!queries[0] &&
+					!searchParams.favorite &&
+					scopes.length > 1 &&
+					scopes.every((scope) => Number.isFinite(scope.count));
+				const counts = weighted ? getRandomCounts(scopes) : null;
+				for (let i = 0; i < scopes.length; i++) {
+					const scope = scopes[i];
+					const count = counts ? counts[i] : serverRandom ? maxSize : null;
+					if (count === 0) {
+						continue;
+					}
+					for (const q of queries) {
+						const params = { ...searchParams, ...scope.params };
+						if (q) {
+							params.q = q;
+						}
+						logger.debug(`Searching PhotoPrism pictures in ${scope.name || "library"}, query: "${q}"`);
+						headerTokens.push(await findPhotos(accessToken, params, scope.name, photos, count));
+					}
+				}
+				return headerTokens;
+			}
+
 			try {
 				for (const accessToken of config.photoprism_access_tokens) {
-					const photos = new Map();
-					const headerTokens = [];
-
-					if (albumNamesLower.length) {
-						logger.debug("Fetching PhotoPrism albums");
-						const albums = [];
-						await fetchAllPages("albums", { type: "album" }, accessToken, (results) => {
-							albums.push(...results);
-						});
-						const albumsToFetch = albums.filter((album) => {
-							const include = albumNamesLower.includes(String(album.Title).toLowerCase());
-							logger.debug(`${include ? "Adding" : "Skipping"} album: ${album.Title}`);
-							return include;
-						});
-						if (!albumsToFetch.length) {
-							logger.error(`No matching PhotoPrism albums found: ${config.photoprism_album_names}`);
-						}
-						for (const album of albumsToFetch) {
-							logger.debug("Fetching photos for album: ", album.Title);
-							headerTokens.push(await findPhotos(accessToken, { ...searchParams, s: album.UID }, album.Title, photos));
-						}
+					const scopes = await getScopes(accessToken);
+					if (!scopes.length) {
+						continue;
 					}
-
-					if (labelNamesLower.length) {
-						logger.debug("Fetching PhotoPrism labels");
-						const labels = [];
-						await fetchAllPages("labels", { all: true }, accessToken, (results) => {
-							labels.push(...results);
-						});
-						const labelsToFetch = labels.filter((label) => {
-							const include =
-								labelNamesLower.includes(String(label.Name).toLowerCase()) ||
-								labelNamesLower.includes(String(label.Slug).toLowerCase());
-							logger.debug(`${include ? "Adding" : "Skipping"} label: ${label.Name}`);
-							return include;
-						});
-						if (!labelsToFetch.length) {
-							logger.error(`No matching PhotoPrism labels found: ${config.photoprism_label_names}`);
+					let photos = new Map();
+					let headerTokens = [];
+					for (const query of queryChain) {
+						photos = new Map();
+						headerTokens = await searchScopes(accessToken, scopes, query, photos);
+						if (photos.size) {
+							logger.debug(`Found ${photos.size} PhotoPrism pictures using query "${query}"`);
+							break;
 						}
-						for (const label of labelsToFetch) {
-							logger.debug("Fetching photos for label: ", label.Name);
-							headerTokens.push(
-								await findPhotos(accessToken, { ...searchParams, label: label.Slug }, label.Name, photos)
-							);
-						}
+						logger.debug(`No PhotoPrism pictures found using query "${query}"`);
 					}
-
-					if (!albumNamesLower.length && !labelNamesLower.length) {
-						logger.debug("Fetching photos from PhotoPrism library");
-						headerTokens.push(await findPhotos(accessToken, searchParams, null, photos));
-					}
-
 					if (!photos.size) {
 						continue;
 					}
@@ -5018,7 +5167,13 @@ function initWallpanel() {
 				if (!this.isPaused && !this.updatingMedia && switchMedia) {
 					this.switchActiveMedia("display_time_elapsed");
 				}
-				if (now - this.lastMediaListUpdate >= config.media_list_update_interval * 1000) {
+				if (
+					now - this.lastMediaListUpdate >= config.media_list_update_interval * 1000 ||
+					(mediaSourceType() == "photoprism-api" &&
+						this.photoprismMediaListDate &&
+						this.photoprismMediaListDate != photoprismDateKey(new Date()))
+				) {
+					// PhotoPrism queries with date placeholders are also updated when the day changes
 					this.updateMediaList(null, true);
 				}
 				if (this.imageOneContainer.style.visibility != "visible") {
