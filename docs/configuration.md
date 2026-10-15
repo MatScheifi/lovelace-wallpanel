@@ -65,6 +65,8 @@ You can set the following configuration parameters for every individual Home Ass
 | photoprism_label_names           | Display media only with the specified PhotoPrism labels.                                               | []        |
 | photoprism_favorites             | Display only media marked as favorite.                                                                 | false     |
 | photoprism_query                 | PhotoPrism search query or list of queries, supports date placeholders. See [On this day](media-sources.md#on-this-day) for details. |           |
+| photoprism_query_min_results     | Minimum number of pictures a query of the `photoprism_query` list must return. See [On this day](media-sources.md#on-this-day) for details. | 1         |
+| photoprism_album_mode            | `all` to show media from all albums, `random_single` to show media from a single random album per media list update. See [Random album](media-sources.md#random-album). | all       |
 | photoprism_resolution            | The resolution to use for loading media from PhotoPrism (`preview` / `original` / thumbnail size name like `fit_2560`). | preview   |
 | exclude_filenames                | List of regular expressions for excluding files and directories from media sources. See [Media Sources](media-sources.md#exclude-files) for details. | []        |
 | exclude_media_types              | List of media types to exlcude media sources. See [Media Sources](media-sources.md#exclude-files) for details. | []        |
