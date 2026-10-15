@@ -72,6 +72,8 @@ const defaultConfig = {
 	photoprism_label_names: [],
 	photoprism_favorites: false,
 	photoprism_query: "",
+	photoprism_query_min_results: 1,
+	photoprism_album_mode: "all", // all / random_single
 	photoprism_resolution: "preview", // preview / original / thumbnail size name (e.g. fit_2560)
 	image_fit_landscape: "cover", // cover / contain
 	image_fit_portrait: "contain", // cover / contain
@@ -137,7 +139,6 @@ const renamedConfigOptions = {
 	screensaver_stop_navigation_path: "screensaver_start_navigation_path",
 	card_interaction: "content_interaction",
 	immich_api_key: "immich_api_keys",
-	photoprism_access_token: "photoprism_access_tokens",
 	caclulate_media_size: "calculate_media_size"
 };
 
@@ -970,7 +971,7 @@ function sampleDistinctIntegers(total, n, randomFn = Math.random) {
 	return result;
 }
 
-const PHOTOPRISM_DATE_PLACEHOLDER_REGEXP = /\{(day|month|year|week)\}/;
+const PHOTOPRISM_DATE_PLACEHOLDER_REGEXP = /\{(day|month|year|week|days:\d+)\}/;
 
 function photoprismQueryHasDatePlaceholder(query) {
 	return PHOTOPRISM_DATE_PLACEHOLDER_REGEXP.test(query || "");
@@ -981,19 +982,23 @@ function photoprismDateKey(date) {
 }
 
 // Replaces the date placeholders of a PhotoPrism search query with the local date.
-// {week} selects the days from three days before to three days after the date.
+// {days:N} selects the days from N days before to N days after the date, {week} is an alias for {days:3}.
 // As PhotoPrism can't combine month and day filters with OR, the query is split
-// into one query per month if the week spans two months.
+// into one query per month if the days span several months.
 function expandPhotoPrismQuery(query, date) {
 	query = (query || "")
 		.replace(/\{day\}/g, date.getDate())
 		.replace(/\{month\}/g, date.getMonth() + 1)
-		.replace(/\{year\}/g, date.getFullYear());
-	if (!query.includes("{week}")) {
+		.replace(/\{year\}/g, date.getFullYear())
+		.replace(/\{week\}/g, "{days:3}");
+	const match = query.match(/\{days:(\d+)\}/);
+	if (!match) {
 		return [query];
 	}
+	// More than half a year would select the same month twice
+	const range = Math.min(Number(match[1]), 182);
 	const months = [];
-	for (let offset = -3; offset <= 3; offset++) {
+	for (let offset = -range; offset <= range; offset++) {
 		const day = new Date(date.getFullYear(), date.getMonth(), date.getDate() + offset);
 		const month = day.getMonth() + 1;
 		let entry = months.find((m) => m.month == month);
@@ -1003,7 +1008,12 @@ function expandPhotoPrismQuery(query, date) {
 		}
 		entry.days.push(day.getDate());
 	}
-	return months.map((m) => query.replace(/\{week\}/g, `month:${m.month} day:${m.days.join("|")}`).trim());
+	return months.map((m) =>
+		query
+			.split(match[0])
+			.join(`month:${m.month} day:${m.days.join("|")}`)
+			.trim()
+	);
 }
 
 function getHaCameraStreamPlayerAndVideo(haCameraStreamElement) {
@@ -2814,6 +2824,8 @@ function initWallpanel() {
 					(config.photoprism_favorites != oldConfig.photoprism_favorites ||
 						profileEntityStateChanged ||
 						JSON.stringify(config.photoprism_query) != JSON.stringify(oldConfig.photoprism_query) ||
+						config.photoprism_query_min_results != oldConfig.photoprism_query_min_results ||
+						config.photoprism_album_mode != oldConfig.photoprism_album_mode ||
 						config.photoprism_resolution != oldConfig.photoprism_resolution ||
 						JSON.stringify(config.photoprism_access_tokens) != JSON.stringify(oldConfig.photoprism_access_tokens) ||
 						JSON.stringify(config.photoprism_album_names) != JSON.stringify(oldConfig.photoprism_album_names) ||
@@ -3877,7 +3889,7 @@ function initWallpanel() {
 
 		async updateMediaListFromPhotoPrismAPI() {
 			if (!config.photoprism_access_tokens || !config.photoprism_access_tokens.length) {
-				throw new Error("No photoprism_access_token configured");
+				throw new Error("No photoprism_access_tokens configured");
 			}
 			const wp = this;
 			const screenOrientation =
@@ -4127,7 +4139,12 @@ function initWallpanel() {
 						logger.error(`No matching PhotoPrism albums found: ${config.photoprism_album_names}`);
 					}
 					for (const album of albumsToFetch) {
-						scopes.push({ params: { s: album.UID }, name: album.Title, count: album.PhotoCount });
+						scopes.push({
+							key: `album:${album.UID}`,
+							params: { s: album.UID },
+							name: album.Title,
+							count: album.PhotoCount
+						});
 					}
 				}
 				if (labelNamesLower.length) {
@@ -4147,11 +4164,16 @@ function initWallpanel() {
 						logger.error(`No matching PhotoPrism labels found: ${config.photoprism_label_names}`);
 					}
 					for (const label of labelsToFetch) {
-						scopes.push({ params: { label: label.Slug }, name: label.Name, count: label.PhotoCount });
+						scopes.push({
+							key: `label:${label.Slug}`,
+							params: { label: label.Slug },
+							name: label.Name,
+							count: label.PhotoCount
+						});
 					}
 				}
 				if (!albumNamesLower.length && !labelNamesLower.length) {
-					scopes.push({ params: {}, name: null, count: null });
+					scopes.push({ key: "library", params: {}, name: null, count: null });
 				}
 				return scopes;
 			}
@@ -4207,22 +4229,61 @@ function initWallpanel() {
 				return headerTokens;
 			}
 
+			const minResults = Math.max(1, Number(config.photoprism_query_min_results) || 1);
+
+			function selectRandomScope(scopes) {
+				// Select one random album or label, preferably not the one selected last time.
+				// Albums and labels with less than photoprism_query_min_results pictures are skipped.
+				let candidates = scopes.filter((scope) => scope.count >= minResults);
+				if (!candidates.length) {
+					candidates = scopes.filter((scope) => scope.count > 0);
+				}
+				if (!candidates.length) {
+					return scopes;
+				}
+				if (candidates.length > 1) {
+					candidates = candidates.filter((scope) => scope.key != wp.photoprismLastScopeKey);
+				}
+				const scope = candidates[Math.floor(Math.random() * candidates.length)];
+				wp.photoprismLastScopeKey = scope.key;
+				logger.info(`Selected PhotoPrism ${scope.key.split(":")[0]}: ${scope.name} (${scope.count} pictures)`);
+				return [scope];
+			}
+
 			try {
 				for (const accessToken of config.photoprism_access_tokens) {
-					const scopes = await getScopes(accessToken);
+					let scopes = await getScopes(accessToken);
 					if (!scopes.length) {
 						continue;
 					}
+					if (
+						config.photoprism_album_mode == "random_single" &&
+						scopes.length > 1 &&
+						queryChain.every((query) => !query) &&
+						scopes.every((scope) => Number.isFinite(scope.count))
+					) {
+						scopes = selectRandomScope(scopes);
+					}
+					// The first query of the chain with at least photoprism_query_min_results pictures is used.
+					// If no query reaches the minimum, the query with the most pictures is used.
 					let photos = new Map();
 					let headerTokens = [];
+					let best = null;
 					for (const query of queryChain) {
 						photos = new Map();
 						headerTokens = await searchScopes(accessToken, scopes, query, photos);
-						if (photos.size) {
-							logger.debug(`Found ${photos.size} PhotoPrism pictures using query "${query}"`);
+						logger.debug(`Found ${photos.size} PhotoPrism pictures using query "${query}"`);
+						if (photos.size >= minResults) {
+							best = null;
 							break;
 						}
-						logger.debug(`No PhotoPrism pictures found using query "${query}"`);
+						if (photos.size && (!best || photos.size >= best.photos.size)) {
+							best = { photos: photos, headerTokens: headerTokens };
+						}
+					}
+					if (best) {
+						photos = best.photos;
+						headerTokens = best.headerTokens;
 					}
 					if (!photos.size) {
 						continue;

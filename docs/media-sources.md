@@ -309,6 +309,9 @@ The following options select the media items:
 * `photoprism_favorites`: `true` to show favorites only
 * `photoprism_query`: a [PhotoPrism search query](https://docs.photoprism.app/user-guide/search/filters/), e.g. `year:2024 country:at`,
   or a list of queries (see [On this day](#on-this-day))
+* `photoprism_query_min_results`: minimum number of pictures a query of the `photoprism_query` list must return (default: `1`)
+* `photoprism_album_mode`: `all` (default) to show pictures from all albums and labels,
+  or `random_single` to show pictures from a single random album or label (see [Random album](#random-album))
 
 Media items from all configured albums and labels are combined.
 Album titles are matched exactly (case-insensitive), if several albums have the same title, all of them are used.
@@ -376,14 +379,18 @@ image_info_template: "${Title} - ${TakenAtLocal}"
 * `{day}`: day of the month
 * `{month}`: month (1-12)
 * `{year}`: year
-* `{week}`: the days from three days before to three days after the current day (e.g. `month:10 day:12|13|14|15|16|17|18`),
-  if the days span two months, two queries are combined
+* `{days:N}`: the days from N days before to N days after the current day,
+  e.g. `{days:3}` is replaced with `month:10 day:12|13|14|15|16|17|18` on October 15th.
+  If the days span several months, one query per month is sent and the results are combined.
+* `{week}`: same as `{days:3}`
 
-If `photoprism_query` is a list, the queries are tried in order and the first one that returns media items is used.
+If `photoprism_query` is a list, the queries are tried in order and the first one that returns
+at least `photoprism_query_min_results` pictures (default: `1`) is used.
+If no query reaches this number, the query with the most pictures is used.
 Queries with placeholders are also updated when the day changes.
 
 Example showing pictures taken on this day in previous years from two albums,
-falling back to the current week and then to the current month:
+widening the time span until at least 30 pictures are found:
 ```yaml
 image_url: photoprism+https://photos.your.domain
 photoprism_access_tokens:
@@ -393,13 +400,41 @@ photoprism_album_names:
   - Holidays
 photoprism_query:
   - "month:{month} day:{day}"
-  - "{week}"
+  - "{days:3}"
+  - "{days:7}"
+  - "{days:14}"
   - "month:{month}"
+  - "{days:45}"
+photoprism_query_min_results: 30
 exclude_media_types:
   - video
 media_list_max_size: 60
 media_list_update_interval: 3600
 image_info_template: "${Title} - ${TakenAtLocal}"
+```
+
+### Random album
+With `photoprism_album_mode: random_single`, a single album or label is selected randomly on every media list update
+and `media_list_max_size` random pictures of it are shown.
+The same album is not selected twice in a row, albums and labels with less than `photoprism_query_min_results` pictures are skipped.
+Albums with the same title are treated as separate albums.
+The title of the selected album is available as `image.folderName` in the `image_info_template`.
+This option is only used if `photoprism_query` is empty, otherwise all albums and labels are searched.
+
+Example showing a different album every hour:
+```yaml
+image_url: photoprism+https://photos.your.domain
+photoprism_access_tokens:
+  - Y2b7Q-wXZpo-7rKcS-fNa3u
+photoprism_album_names:
+  - Family
+  - Holidays
+  - Tokio
+photoprism_album_mode: random_single
+photoprism_query_min_results: 30
+media_list_max_size: 60
+media_list_update_interval: 3600
+image_info_template: "${image.folderName} - ${TakenAtLocal}"
 ```
 
 ## Website as iframe
