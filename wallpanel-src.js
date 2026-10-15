@@ -137,7 +137,6 @@ const renamedConfigOptions = {
 	screensaver_stop_navigation_path: "screensaver_start_navigation_path",
 	card_interaction: "content_interaction",
 	immich_api_key: "immich_api_keys",
-	photoprism_access_token: "photoprism_access_tokens",
 	caclulate_media_size: "calculate_media_size"
 };
 
@@ -3877,7 +3876,7 @@ function initWallpanel() {
 
 		async updateMediaListFromPhotoPrismAPI() {
 			if (!config.photoprism_access_tokens || !config.photoprism_access_tokens.length) {
-				throw new Error("No photoprism_access_token configured");
+				throw new Error("No photoprism_access_tokens configured");
 			}
 			const wp = this;
 			const screenOrientation =
