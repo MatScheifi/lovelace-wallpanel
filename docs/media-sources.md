@@ -444,12 +444,14 @@ image_info_template: "${image.folderName} - ${TakenAtLocal}"
 If `photoprism_status_entity` is set to an `input_text` entity, a short status text is written to it after every media list update,
 for example:
 
-* `Album: Schweden 2025 (797) · 60 Bilder · 15:00` (`photoprism_album_mode: random_single`)
-* `Alben: 62 · 60 Bilder · 15:00` (all configured albums)
-* `15.10. ±3 Tage · 43 Bilder (Stufe 2/6) · 15:00` (reference date, selected query of the `photoprism_query` list
+* `Album: Sweden 2025 (797) · 60 pictures · 15:00` (`photoprism_album_mode: random_single`)
+* `Albums: 62 · 60 pictures · 15:00` (all configured albums)
+* `10/15 ±3 days · 43 pictures (level 2/6) · 15:00` (reference date, selected query of the `photoprism_query` list
   and number of matching pictures before limiting to `media_list_max_size`)
-* `Keine Bilder gefunden (15.10. Tag) · 15:00`
+* `No pictures found (10/15 day) · 15:00`
 
+The texts are available in English and German and are selected by the Home Assistant language,
+the date is formatted according to the language.
 The text is limited to 255 characters, the maximum length of an `input_text` entity.
 
 ## Website as iframe

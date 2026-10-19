@@ -1017,18 +1017,57 @@ function getPhotoPrismReferenceDate() {
 	return null;
 }
 
+// Texts of the PhotoPrism status entity, selected by the Home Assistant language.
+const PHOTOPRISM_STATUS_TEXTS = {
+	en: {
+		album: "Album",
+		albums: "Albums",
+		label: "Label",
+		labels: "Labels",
+		library: "Library",
+		pictures: "pictures",
+		day: "day",
+		month: "month",
+		days: "days",
+		level: "level",
+		none: "No pictures found"
+	},
+	de: {
+		album: "Album",
+		albums: "Alben",
+		label: "Label",
+		labels: "Labels",
+		library: "Mediathek",
+		pictures: "Bilder",
+		day: "Tag",
+		month: "Monat",
+		days: "Tage",
+		level: "Stufe",
+		none: "Keine Bilder gefunden"
+	}
+};
+
+function getHassLanguage() {
+	const hass = elHass ? elHass.hass || elHass.__hass : null;
+	return (hass && ((hass.locale && hass.locale.language) || hass.language)) || "en";
+}
+
+function getPhotoPrismStatusTexts(language) {
+	return PHOTOPRISM_STATUS_TEXTS[String(language).split("-")[0].toLowerCase()] || PHOTOPRISM_STATUS_TEXTS.en;
+}
+
 // Returns a short description of a photoprism_query for the status entity.
-function describePhotoPrismQuery(query) {
+function describePhotoPrismQuery(query, texts = PHOTOPRISM_STATUS_TEXTS.en) {
 	query = (query || "").trim();
 	if (/^month:\{month\}\s+day:\{day\}$/.test(query)) {
-		return "Tag";
+		return texts.day;
 	}
 	if (/^month:\{month\}$/.test(query)) {
-		return "Monat";
+		return texts.month;
 	}
 	const match = query.match(/^\{(week|days:(\d+))\}$/);
 	if (match) {
-		return `±${match[2] || 3} Tage`;
+		return `±${match[2] || 3} ${texts.days}`;
 	}
 	return query;
 }
@@ -4427,17 +4466,19 @@ function initWallpanel() {
 			function getStatusText() {
 				const pad = (n) => String(n).padStart(2, "0");
 				const updated = new Date();
+				const language = getHassLanguage();
+				const texts = getPhotoPrismStatusTexts(language);
 				const albums = status.scopes.filter((scope) => scope.key.startsWith("album:"));
 				const labels = status.scopes.filter((scope) => scope.key.startsWith("label:"));
 				let source;
 				if (status.selectedScope) {
-					const type = status.selectedScope.key.startsWith("label:") ? "Label" : "Album";
+					const type = status.selectedScope.key.startsWith("label:") ? texts.label : texts.album;
 					source = `${type}: ${status.selectedScope.name} (${status.selectedScope.count})`;
 				} else {
 					const parts = [];
 					for (const [scopes, one, many] of [
-						[albums, "Album", "Alben"],
-						[labels, "Label", "Labels"]
+						[albums, texts.album, texts.albums],
+						[labels, texts.label, texts.labels]
 					]) {
 						if (scopes.length == 1) {
 							parts.push(`${one}: ${scopes[0].name}`);
@@ -4445,22 +4486,28 @@ function initWallpanel() {
 							parts.push(`${many}: ${scopes.length}`);
 						}
 					}
-					source = parts.length ? parts.join(" · ") : "Mediathek";
+					source = parts.length ? parts.join(" · ") : texts.library;
 				}
 				const query = status.queryIndex >= 0 ? queryChain[status.queryIndex] : "";
 				let text;
 				if (query) {
 					// Query: reference date, query description, number of matches and query level
-					let description = describePhotoPrismQuery(query);
+					let description = describePhotoPrismQuery(query, texts);
 					if (photoprismQueryHasDatePlaceholder(query)) {
-						description = `${pad(now.getDate())}.${pad(now.getMonth() + 1)}. ${description}`;
+						let date;
+						try {
+							date = now.toLocaleDateString(language, { day: "2-digit", month: "2-digit" });
+						} catch {
+							date = `${pad(now.getDate())}.${pad(now.getMonth() + 1)}.`;
+						}
+						description = `${date} ${description}`;
 					}
-					const level = queryChain.length > 1 ? ` (Stufe ${status.queryIndex + 1}/${queryChain.length})` : "";
+					const level = queryChain.length > 1 ? ` (${texts.level} ${status.queryIndex + 1}/${queryChain.length})` : "";
 					text = status.hits
-						? `${description} · ${status.hits} Bilder${level}`
-						: `Keine Bilder gefunden (${description})`;
+						? `${description} · ${status.hits} ${texts.pictures}${level}`
+						: `${texts.none} (${description})`;
 				} else {
-					text = urls.length ? `${source} · ${urls.length} Bilder` : `Keine Bilder gefunden (${source})`;
+					text = urls.length ? `${source} · ${urls.length} ${texts.pictures}` : `${texts.none} (${source})`;
 				}
 				return `${text} · ${pad(updated.getHours())}:${pad(updated.getMinutes())}`;
 			}
